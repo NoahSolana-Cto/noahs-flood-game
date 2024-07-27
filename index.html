@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Noah's Flood</title>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/brython@3.9.5/brython.min.js"></script>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: url('assets/page_background.png') no-repeat center center fixed;
+            background-size: cover;
+        }
+        #gameCanvas {
+            border: 1px solid #000;
+        }
+        #startScreen, #gameOverScreen {
+            position: absolute;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            height: 100vh;
+            width: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        #startButton, #restartButton {
+            padding: 10px 20px;
+            font-size: 20px;
+            margin-top: 450px;  /* Adjust this value to place the button lower */
+            cursor: pointer;
+            background: linear-gradient(to right, #00c6ff, #0072ff);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            position: absolute;
+            box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.3);  /* Add drop shadow */
+            outline: 2px solid black;  /* Add 2pt black outline */
+        }
+        #gameOverScreen {
+            display: none;
+        }
+    </style>
+</head>
+<body onload="brython()">
+    <div id="startScreen">
+        <img src="assets/title.png" alt="Title" width="400" height="600">
+        <button id="startButton">START</button>
+    </div>
+    <div id="gameOverScreen">
+        <img src="assets/gameover.png" alt="Game Over" width="400" height="600">
+        <button id="restartButton">RESTART</button>
+        <div id="scoreDisplay" style="color: white; font-size: 24px; position: absolute; top: 20px;"></div>
+    </div>
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <script type="text/python">
+from browser import document, html, window
+
+# Setup canvas
+canvas = document['gameCanvas']
+ctx = canvas.getContext('2d')
+
+# Load assets
+background_img = html.IMG(src='assets/background.png')
+player_img = html.IMG(src='assets/player.png')
+obstacle_top_img = html.IMG(src='assets/obstacle_top.png')
+obstacle_bottom_img = html.IMG(src='assets/obstacle_bottom.png')
+background_music = html.AUDIO(src='assets/Wholl_Stop_The_Rain.mp3', loop=True)
+
+# Ensure assets are loaded before starting the game
+assets_loaded = [False, False, False, False, False]
+
+def check_assets_loaded(event):
+    index = int(event.target.id)
+    assets_loaded[index] = True
+    if all(assets_loaded):
+        document['startButton'].bind('click', start_game)
+        document['restartButton'].bind('click', restart_game)
+        print("Assets loaded and buttons bound")
+
+background_img.bind('load', check_assets_loaded)
+player_img.bind('load', check_assets_loaded)
+obstacle_top_img.bind('load', check_assets_loaded)
+obstacle_bottom_img.bind('load', check_assets_loaded)
+background_music.bind('loadeddata', check_assets_loaded)
+
+background_img.attrs['id'] = '0'
+player_img.attrs['id'] = '1'
+obstacle_top_img.attrs['id'] = '2'
+obstacle_bottom_img.attrs['id'] = '3'
+background_music.attrs['id'] = '4'
+
+# Game variables
+player_x = 50
+player_y = 300
+player_velocity = 0
+gravity = 0.25
+jump_strength = -6
+bg_x1 = 0
+bg_x2 = canvas.width
+bg_speed = 2
+obstacles = []
+score = 0
+high_score = 0
+game_started = False
+obstacle_interval = None
+frame_request = None
+
+PLAYER_WIDTH = 108  # Increase by 20% from original 90
+PLAYER_HEIGHT = 108  # Increase by 20% from original 90
+BACKGROUND_WIDTH = 600  # Actual width of background.png
+BACKGROUND_HEIGHT = 400  # Actual height of background.png
+OBSTACLE_WIDTH = 72  # Actual width of obstacle images
+OBSTACLE_HEIGHT = 300  # Actual height of obstacle images
+
+class Obstacle:
+    def __init__(self):
+        self.width = OBSTACLE_WIDTH
+        self.gap = 200
+        self.speed = 5
+        self.top_height = int(100 + window.Math.random() * 200)
+        self.bottom_height = canvas.height - self.top_height - self.gap
+        self.x = canvas.width
+        self.top_rect = [self.x, 0, self.width, self.top_height]
+        self.bottom_rect = [self.x, canvas.height - self.bottom_height, self.width, self.bottom_height]
+        self.passed = False
+
+    def update(self):
+        self.x -= self.speed
+        self.top_rect[0] = self.x
+        self.bottom_rect[0] = self.x
+
+    def draw(self, ctx):
+        ctx.drawImage(obstacle_top_img, self.x, 0, self.width, self.top_height)
+        ctx.drawImage(obstacle_bottom_img, self.x, canvas.height - self.bottom_height, self.width, self.bottom_height)
+
+    def collide(self, player_rect):
+        player_collider = [player_rect[0] + 10, player_rect[1] + 10, player_rect[2] - 20, player_rect[3] - 20]
+        obstacle_top_collider = [self.top_rect[0] + 10, self.top_rect[1], self.top_rect[2] - 20, self.top_rect[3]]
+        obstacle_bottom_collider = [self.bottom_rect[0] + 10, self.bottom_rect[1], self.bottom_rect[2] - 20, self.bottom_rect[3]]
+        
+        return (self.rects_overlap(player_collider, obstacle_top_collider) or
+                self.rects_overlap(player_collider, obstacle_bottom_collider))
+    
+    def rects_overlap(self, rect1, rect2):
+        return (rect1[0] < rect2[0] + rect2[2] and
+                rect1[0] + rect1[2] > rect2[0] and
+                rect1[1] < rect2[1] + rect2[3] and
+                rect1[1] + rect1[3] > rect2[1])
+
+def draw_image(image, x, y, width=None, height=None):
+    if width and height:
+        ctx.drawImage(image, x, y, width, height)
+    else:
+        ctx.drawImage(image, x, y)
+
+def reset_game():
+    global player_x, player_y, player_velocity, bg_x1, bg_x2, obstacles, score, game_started, obstacle_interval, frame_request
+    player_x = 50
+    player_y = 300
+    player_velocity = 0
+    bg_x1 = 0
+    bg_x2 = canvas.width
+    obstacles.clear()
+    score = 0
+    game_started = True
+    spawn_obstacle()
+    if obstacle_interval:
+        window.clearInterval(obstacle_interval)
+    obstacle_interval = window.setInterval(spawn_obstacle, 1500)  # Spawn a new obstacle every 1.5 seconds
+    if frame_request:
+        window.cancelAnimationFrame(frame_request)
+    frame_request = window.requestAnimationFrame(update)
+
+def spawn_obstacle():
+    if game_started:
+        obstacles.append(Obstacle())
+
+def update(*args):
+    global player_y, player_velocity, bg_x1, bg_x2, score, frame_request
+    # Update player
+    player_velocity += gravity
+    player_y += player_velocity
+
+    if player_y > canvas.height - PLAYER_HEIGHT:
+        player_y = canvas.height - PLAYER_HEIGHT
+        player_velocity = 0
+    elif player_y < 0:
+        player_y = 0
+        player_velocity = 0
+
+    # Update background
+    bg_x1 -= bg_speed
+    bg_x2 -= bg_speed
+
+    if bg_x1 <= -canvas.width:
+        bg_x1 = canvas.width
+    if bg_x2 <= -canvas.width:
+        bg_x2 = canvas.width
+
+    # Update obstacles
+    for obstacle in obstacles:
+        obstacle.update()
+        if not obstacle.passed and obstacle.x < player_x:
+            obstacle.passed = True
+            score += 1
+
+    # Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    # Draw background
+    draw_image(background_img, bg_x1, 0, canvas.width, canvas.height)
+    draw_image(background_img, bg_x2, 0, canvas.width, canvas.height)
+
+    # Draw player
+    player_rect = [player_x, player_y, PLAYER_WIDTH * 0.9, PLAYER_HEIGHT * 0.9]
+    draw_image(player_img, player_x, player_y, PLAYER_WIDTH * 0.9, PLAYER_HEIGHT * 0.9)
+
+    # Draw obstacles
+    for obstacle in obstacles:
+        obstacle.draw(ctx)
+        if obstacle.collide(player_rect):
+            game_over()
+
+    # Draw score
+    ctx.font = '30px Arial'
+    ctx.fillStyle = 'white'
+    ctx.fillText(f'Score: {score}', 10, 30)
+
+    # Remove off-screen obstacles
+    obstacles[:] = [ob for ob in obstacles if ob.x + ob.width > 0]
+
+    # Request next frame
+    frame_request = window.requestAnimationFrame(update)
+
+def game_over():
+    global game_started, obstacle_interval, frame_request, high_score
+    game_started = False
+    document['gameOverScreen'].style.display = 'flex'
+    window.clearInterval(obstacle_interval)
+    window.cancelAnimationFrame(frame_request)
+
+    if score > high_score:
+        high_score = score
+
+    score_display = document['scoreDisplay']
+    score_display.text = f'Score: {score}  High Score: {high_score}'
+
+def start_game(event=None):
+    global game_started, frame_request
+    print("Start button clicked")
+    if not game_started:
+        game_started = True
+        document['startScreen'].style.display = 'none'
+        document['gameOverScreen'].style.display = 'none'
+        if background_music.paused:
+            background_music.play()
+        print("Background music started")
+        reset_game()
+
+def restart_game(event=None):
+    global game_started, frame_request
+    print("Restart button clicked")
+    if not game_started:
+        game_started = True
+        document['gameOverScreen'].style.display = 'none'
+        if background_music.paused:
+            background_music.play()
+        print("Background music started")
+        reset_game()
+
+def keydown(event):
+    global player_velocity
+    if event.keyCode == 32:  # Space key
+        if not game_started:
+            start_game()
+        player_velocity = jump_strength
+
+document.bind('keydown', keydown)
+    </script>
+</body>
+</html>
